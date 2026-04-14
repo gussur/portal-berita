@@ -1,0 +1,17 @@
+{
+  "name": "gussur-berita-scraper",
+  "version": "1.0.0",
+  "description": "Scraper berita ekonomi otomatis untuk gussur.com",
+  "main": "scraper.js",
+  "scripts": {
+    "start": "node scraper.js",
+    "test:dry": "DRY_RUN=true node scraper.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "rss-parser": "^3.13.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
