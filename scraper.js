@@ -11,10 +11,10 @@ const path = require('path');
 // ─────────────────────────────────────────
 
 const RSS_FEEDS = [
-  { name: 'Kontan',          url: 'https://www.kontan.co.id/rss/investasi' },
-  { name: 'Bisnis.com',      url: 'https://market.bisnis.com/feed' },
-  { name: 'CNBC Indonesia',  url: 'https://www.cnbcindonesia.com/investment/rss' },
-  { name: 'IDX Channel',     url: 'https://www.idxchannel.com/feed' },
+  { name: 'Google News: IHSG',    url: 'https://news.google.com/rss/search?q=IHSG+saham&hl=id&gl=ID&ceid=ID:id' },
+  { name: 'Google News: Ekonomi', url: 'https://news.google.com/rss/search?q=ekonomi+Indonesia+pasar+modal&hl=id&gl=ID&ceid=ID:id' },
+  { name: 'Google News: IDX',     url: 'https://news.google.com/rss/search?q=Bursa+Efek+Indonesia+emiten&hl=id&gl=ID&ceid=ID:id' },
+  { name: 'Google News: Rupiah',  url: 'https://news.google.com/rss/search?q=rupiah+inflasi+BI+rate&hl=id&gl=ID&ceid=ID:id' },
 ];
 
 const MAX_ARTICLES_PER_RUN = 8;       // batas artikel per hari
@@ -198,7 +198,7 @@ async function main() {
     const items = await fetchFeed(feed.url, feed.name);
     const fresh = items.filter(item =>
       item.link &&
-      item.content.length > 80 &&
+      item.content.length > 20 &&
       !processed.has(item.link)
     );
     console.log(`   → ${fresh.length} artikel baru dari ${items.length} total`);
@@ -247,4 +247,6 @@ async function main() {
 main().catch(err => {
   console.error('💥 Fatal error:', err.message);
   process.exit(1);
+}).then(() => {
+  process.exit(0); 
 });
