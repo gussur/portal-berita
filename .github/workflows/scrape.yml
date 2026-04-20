@@ -1,20 +1,14 @@
 name: Scrape Berita Ekonomi
-
 on:
   schedule:
-    # 05:00 WIB = 22:00 UTC (hari sebelumnya)
     - cron: '0 22 * * *'
-
-  # Bisa dijalankan manual dari tab Actions di GitHub
   workflow_dispatch:
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-
     permissions:
-      contents: write  # diperlukan untuk commit processed_urls.json
-
+      contents: write
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -29,12 +23,16 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: List available models
+        run: |
+          curl -s "https://generativelanguage.googleapis.com/v1beta/models?key=${{ secrets.GEMINI_API_KEY }}" | grep '"name"'
+
       - name: Jalankan scraper
         env:
-          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
-          WP_URL:            ${{ secrets.WP_URL }}
-          WP_USER:           ${{ secrets.WP_USER }}
-          WP_APP_PASSWORD:   ${{ secrets.WP_APP_PASSWORD }}
+          GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
+          WP_URL:           ${{ secrets.WP_URL }}
+          WP_USER:          ${{ secrets.WP_USER }}
+          WP_APP_PASSWORD:  ${{ secrets.WP_APP_PASSWORD }}
         run: node scraper.js
 
       - name: Commit processed_urls.json
@@ -42,6 +40,5 @@ jobs:
           git config --local user.email "scraper@gussur.com"
           git config --local user.name "gussur-scraper"
           git add processed_urls.json
-          # Hanya commit jika ada perubahan
           git diff --staged --quiet || git commit -m "chore: update processed URLs [skip ci]"
           git push
