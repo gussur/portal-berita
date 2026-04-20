@@ -18,7 +18,7 @@ const RSS_FEEDS = [
 ];
 
 const MAX_ARTICLES_PER_RUN = 8;
-const DELAY_BETWEEN_REQUESTS = 8000;
+const DELAY_BETWEEN_REQUESTS = 2500;
 const PROCESSED_FILE = path.join(__dirname, 'processed_urls.json');
 
 // Mapping nama kategori → ID WordPress
@@ -130,7 +130,7 @@ Balas HANYA dengan JSON valid tanpa markdown, tanpa backtick:
 
 async function rewriteWithGemini(article) {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-001' });
 
   const userMessage = `Sumber: ${article.source}
 Judul asli: ${article.title}
