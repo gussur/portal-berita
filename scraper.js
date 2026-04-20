@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 
 // ─────────────────────────────────────────
-// KONFIGURASI — sesuaikan sebelum deploy
+// KONFIGURASI
 // ─────────────────────────────────────────
 
 const RSS_FEEDS = [
@@ -17,16 +17,24 @@ const RSS_FEEDS = [
   { name: 'Google News: Rupiah',  url: 'https://news.google.com/rss/search?q=rupiah+inflasi+BI+rate&hl=id&gl=ID&ceid=ID:id' },
 ];
 
-const MAX_ARTICLES_PER_RUN = 8;       // batas artikel per hari
-const DELAY_BETWEEN_REQUESTS = 2500;  // ms, hindari rate limit Gemini
+const MAX_ARTICLES_PER_RUN = 8;
+const DELAY_BETWEEN_REQUESTS = 2500;
 const PROCESSED_FILE = path.join(__dirname, 'processed_urls.json');
 
-// ID kategori WordPress untuk berita saham (cek di WP > Categories)
-// Kosongkan array jika belum ada kategori khusus
-const WP_CATEGORY_IDS = [];
+// Mapping nama kategori → ID WordPress
+const CATEGORY_MAP = {
+  'IHSG':      606,
+  'Emiten':    607,
+  'Makro':     608,
+  'Komoditas': 609,
+  'Obligasi':  610,
+};
+
+// ID induk kategori Ekonomi (parent)
+const EKONOMI_PARENT_ID = null; // isi jika ada, atau biarkan null
 
 // ─────────────────────────────────────────
-// DEDUP — baca/tulis daftar URL yang sudah diproses
+// DEDUP
 // ─────────────────────────────────────────
 
 function loadProcessed() {
@@ -40,7 +48,6 @@ function loadProcessed() {
 }
 
 function saveProcessed(urlSet) {
-  // simpan 500 URL terakhir supaya file tidak membengkak
   const arr = Array.from(urlSet).slice(-500);
   fs.writeFileSync(PROCESSED_FILE, JSON.stringify(arr, null, 2));
 }
@@ -71,17 +78,13 @@ async function fetchFeed(feedUrl, feedName) {
 
 // ─────────────────────────────────────────
 // GEMINI REWRITER
-// Prompt disesuaikan dengan voice gussur.com:
-// - Bahasa Indonesia formal-intim
-// - Kalimat aktif, padat, berbasis data
-// - Tidak pakai emoji, tidak hype
-// - Tutup dengan kalimat analitik singkat
+// Sekaligus generate: artikel, kategori, tags, SEO
 // ─────────────────────────────────────────
 
 const SYSTEM_PROMPT = `Kamu adalah editor di blog gussur.com — blog ekonomi dan pasar modal Indonesia dengan gaya khas: 
 Bahasa Indonesia formal-intim, kalimat aktif, padat berbasis data, kontemplasi ringan. Bukan hype, bukan motivasi.
 
-Tugas: Tulis ulang berita ekonomi/saham berikut menjadi artikel blog dengan ketentuan:
+Tugas: Tulis ulang berita ekonomi/saham berikut menjadi artikel blog, sekaligus tentukan kategori, tags, dan SEO.
 
 JUDUL:
 - Menarik tapi tidak clickbait
@@ -99,16 +102,39 @@ HINDARI:
 "Tahukah kamu", "Yuk simak", "Di era modern ini", "Sangat penting untuk", 
 kata serapan Inggris yang tidak perlu, kalimat pasif berlebihan.
 
+KATEGORI — pilih TEPAT SATU dari daftar ini:
+- IHSG: berita indeks, pergerakan pasar harian, analisis IHSG
+- Emiten: berita spesifik perusahaan/saham, laporan keuangan, aksi korporasi
+- Makro: kebijakan BI, inflasi, kurs, pertumbuhan ekonomi, ekspor-impor
+- Komoditas: batu bara, CPO, nikel, emas, minyak, komoditas lain
+- Obligasi: SBN, obligasi korporasi, yield, suku bunga
+
+TAGS — buat 4–6 tag relevan, format huruf kecil, gunakan nama spesifik:
+Contoh: ihsg, bank central asia, bbca, saham perbankan, idx, net sell asing
+
+META DESCRIPTION — 1 kalimat ringkas 120–155 karakter untuk mesin pencari.
+Harus deskriptif, mengandung kata kunci utama, tidak diakhiri titik-titik.
+
+FOCUS KEYWORD — 2–4 kata kunci utama artikel ini (frasa, bukan kalimat).
+Contoh: "saham BBCA hari ini" atau "IHSG melemah asing jual"
+
 Balas HANYA dengan JSON valid tanpa markdown, tanpa backtick:
-{"title": "...", "content": "..."}`;
+{
+  "title": "...",
+  "content": "...",
+  "category": "IHSG",
+  "tags": ["ihsg", "bursa efek indonesia", "saham"],
+  "meta_description": "...",
+  "focus_keyword": "..."
+}`;
 
 async function rewriteWithGemini(article) {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const userMessage = `Sumber: ${article.source}
 Judul asli: ${article.title}
-Isi: ${article.content.substring(0, 1500)}`; // trim supaya tidak melebihi context
+Isi: ${article.content.substring(0, 1500)}`;
 
   const result = await model.generateContent([
     { text: SYSTEM_PROMPT },
@@ -123,16 +149,58 @@ Isi: ${article.content.substring(0, 1500)}`; // trim supaya tidak melebihi conte
   try {
     return JSON.parse(raw);
   } catch {
-    // fallback jika Gemini mengembalikan teks biasa
     console.warn('  ⚠️  JSON parse gagal, pakai judul asli');
-    return { title: article.title, content: raw };
+    return {
+      title: article.title,
+      content: raw,
+      category: 'IHSG',
+      tags: [],
+      meta_description: article.title,
+      focus_keyword: article.title.split(' ').slice(0, 3).join(' '),
+    };
   }
 }
 
 // ─────────────────────────────────────────
 // WORDPRESS POSTER
-// Menggunakan Application Password (bukan login biasa)
 // ─────────────────────────────────────────
+
+async function getOrCreateTags(tagNames, auth, wpUrl) {
+  const tagIds = [];
+
+  for (const name of tagNames) {
+    if (!name || !name.trim()) continue;
+    const cleanName = name.trim().toLowerCase();
+
+    // Cek apakah tag sudah ada
+    const searchRes = await fetch(
+      `${wpUrl}/wp-json/wp/v2/tags?search=${encodeURIComponent(cleanName)}&per_page=5`,
+      { headers: { 'Authorization': `Basic ${auth}` } }
+    );
+    const existing = await searchRes.json();
+    const found = existing.find(t => t.name.toLowerCase() === cleanName);
+
+    if (found) {
+      tagIds.push(found.id);
+    } else {
+      // Buat tag baru
+      const createRes = await fetch(`${wpUrl}/wp-json/wp/v2/tags`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Basic ${auth}`,
+        },
+        body: JSON.stringify({ name: cleanName }),
+      });
+      if (createRes.ok) {
+        const newTag = await createRes.json();
+        tagIds.push(newTag.id);
+      }
+    }
+  }
+
+  return tagIds;
+}
 
 async function postToWordPress(article, rewritten) {
   const { WP_URL, WP_USER, WP_APP_PASSWORD } = process.env;
@@ -143,22 +211,34 @@ async function postToWordPress(article, rewritten) {
 
   const auth = Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString('base64');
 
-  // Format content dengan HTML sederhana
+  // Resolve category ID
+  const categoryName = rewritten.category || 'IHSG';
+  const categoryId = CATEGORY_MAP[categoryName] || CATEGORY_MAP['IHSG'];
+
+  // Resolve atau buat tag IDs
+  const tagIds = await getOrCreateTags(rewritten.tags || [], auth, WP_URL);
+
+  // Format konten HTML
   const htmlContent = rewritten.content
     .split('\n\n')
     .filter(p => p.trim())
     .map(p => `<p>${p.trim()}</p>`)
     .join('\n');
 
-  // Tambah disclaimer di bawah artikel
   const disclaimer = `\n<hr>\n<p><em>Artikel ini dibuat secara otomatis berdasarkan berita dari ${article.source}. Bukan rekomendasi investasi. Selalu lakukan riset mandiri sebelum mengambil keputusan.</em></p>`;
 
   const payload = {
     title:      rewritten.title,
     content:    htmlContent + disclaimer,
+    excerpt:    rewritten.meta_description || '',
     status:     'draft',
-    categories: WP_CATEGORY_IDS,
+    categories: [categoryId],
+    tags:       tagIds,
     meta: {
+      // Rank Math SEO fields
+      rank_math_focus_keyword:  rewritten.focus_keyword || '',
+      rank_math_description:    rewritten.meta_description || '',
+      // Source tracking
       _source_url:  article.link,
       _source_name: article.source,
     },
@@ -192,7 +272,6 @@ async function main() {
   const processed = loadProcessed();
   let candidates = [];
 
-  // Kumpulkan artikel baru dari semua feed
   for (const feed of RSS_FEEDS) {
     console.log(`📡 Mengambil: ${feed.name}`);
     const items = await fetchFeed(feed.url, feed.name);
@@ -212,7 +291,6 @@ async function main() {
     return;
   }
 
-  // Batasi jumlah per run
   const toProcess = candidates.slice(0, MAX_ARTICLES_PER_RUN);
   console.log(`⚙️  Memproses ${toProcess.length} artikel...\n`);
 
@@ -224,16 +302,17 @@ async function main() {
     try {
       const rewritten = await rewriteWithGemini(article);
       const wpPost = await postToWordPress(article, rewritten);
-      
+
       processed.add(article.link);
       successCount++;
-      console.log(`   ✅ Draft dibuat: "${rewritten.title}" (ID: ${wpPost.id})`);
+      console.log(`   ✅ Draft: "${rewritten.title}"`);
+      console.log(`      Kategori: ${rewritten.category} | Tags: ${(rewritten.tags || []).join(', ')}`);
+      console.log(`      SEO: ${rewritten.focus_keyword}`);
     } catch (err) {
       failCount++;
       console.error(`   ❌ Gagal: ${err.message}`);
     }
 
-    // Jeda antar request
     await new Promise(r => setTimeout(r, DELAY_BETWEEN_REQUESTS));
   }
 
@@ -248,5 +327,5 @@ main().catch(err => {
   console.error('💥 Fatal error:', err.message);
   process.exit(1);
 }).then(() => {
-  process.exit(0); 
+  process.exit(0);
 });
