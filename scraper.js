@@ -30,8 +30,7 @@ const CATEGORY_MAP = {
   'Obligasi':  610,
 };
 
-// ID induk kategori Ekonomi (parent)
-const EKONOMI_PARENT_ID = null; // isi jika ada, atau biarkan null
+const EKONOMI_PARENT_ID = null;
 
 // ─────────────────────────────────────────
 // DEDUP
@@ -77,8 +76,7 @@ async function fetchFeed(feedUrl, feedName) {
 }
 
 // ─────────────────────────────────────────
-// GEMINI REWRITER
-// Sekaligus generate: artikel, kategori, tags, SEO
+// SYSTEM PROMPT (shared semua provider)
 // ─────────────────────────────────────────
 
 const SYSTEM_PROMPT = `Kamu adalah editor di blog gussur.com — blog ekonomi dan pasar modal Indonesia dengan gaya khas: 
@@ -128,50 +126,163 @@ Balas HANYA dengan JSON valid tanpa markdown, tanpa backtick:
   "focus_keyword": "..."
 }`;
 
-async function rewriteWithGemini(article) {
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({ model: 'gemini-flash-latest' });
+// ─────────────────────────────────────────
+// FALLBACK REWRITER
+// Urutan: gemini-2.5-flash → gemini-2.0-flash → Claude
+// Circuit breaker: skip model selama 3 menit setelah 503
+// ─────────────────────────────────────────
 
+const MODELS = [
+  { provider: 'gemini', model: 'gemini-2.5-flash-preview-05-20' },
+  { provider: 'gemini', model: 'gemini-2.0-flash' },
+  { provider: 'claude', model: 'claude-sonnet-4-20250514' },
+];
+
+const CIRCUIT_OPEN_MS = 3 * 60 * 1000; // 3 menit
+const circuitBreaker = {};
+
+function isCircuitOpen(key) {
+  const state = circuitBreaker[key];
+  if (!state) return false;
+  if (Date.now() - state.openedAt > CIRCUIT_OPEN_MS) {
+    delete circuitBreaker[key];
+    return false;
+  }
+  return true;
+}
+
+function openCircuit(key) {
+  circuitBreaker[key] = { openedAt: Date.now() };
+  console.warn(`  🔴 Circuit terbuka: ${key} (skip 3 menit)`);
+}
+
+async function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+// Satu panggilan ke Gemini (raw, tanpa retry)
+async function callGemini(modelName, userMessage) {
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  const model = genAI.getGenerativeModel({ model: modelName });
+  const result = await model.generateContent([
+    { text: SYSTEM_PROMPT },
+    { text: userMessage },
+  ]);
+  return result.response.text().trim();
+}
+
+// Satu panggilan ke Claude (raw, tanpa retry)
+async function callClaude(modelName, userMessage) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type':      'application/json',
+      'x-api-key':         process.env.ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model:      modelName,
+      max_tokens: 1500,
+      system:     SYSTEM_PROMPT,
+      messages:   [{ role: 'user', content: userMessage }],
+    }),
+  });
+
+  if (!res.ok) {
+    const err = new Error(`Claude HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+
+  const data = await res.json();
+  return (data.content?.[0]?.text || '').trim();
+}
+
+// Parse JSON dari raw string (Gemini/Claude kadang masih ada backtick)
+function parseJSON(raw, article) {
+  const clean = raw
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+
+  try {
+    return JSON.parse(clean);
+  } catch {
+    console.warn('  ⚠️  JSON parse gagal, pakai fallback minimal');
+    return {
+      title:            article.title,
+      content:          clean,
+      category:         'IHSG',
+      tags:             [],
+      meta_description: article.title,
+      focus_keyword:    article.title.split(' ').slice(0, 3).join(' '),
+    };
+  }
+}
+
+// Exponential backoff dengan jitter, max 2 retry per model
+async function callWithRetry(fn, maxRetries = 2) {
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const retryable = err.status === 503 || err.status === 500 || err.status === 429
+        || (err.message || '').includes('503')
+        || (err.message || '').includes('overloaded');
+
+      if (!retryable || attempt > maxRetries) throw err;
+
+      const backoff = Math.min(1000 * 2 ** (attempt - 1) + Math.random() * 500, 8000);
+      console.warn(`  ⏳ Retry ${attempt}/${maxRetries} dalam ${Math.round(backoff / 1000)}s... (${err.status || err.message})`);
+      await sleep(backoff);
+    }
+  }
+}
+
+// Main rewrite: coba MODELS secara berurutan dengan circuit breaker
+async function rewriteWithFallback(article) {
   const userMessage = `Sumber: ${article.source}
 Judul asli: ${article.title}
 Isi: ${article.content.substring(0, 1500)}`;
 
-  // Retry sampai 3x jika 503
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (const config of MODELS) {
+    const key = `${config.provider}:${config.model}`;
+
+    if (isCircuitOpen(key)) {
+      console.log(`  ⏭️  Skip ${config.model} (circuit terbuka)`);
+      continue;
+    }
+
     try {
-      const result = await model.generateContent([
-        { text: SYSTEM_PROMPT },
-        { text: userMessage },
-      ]);
+      console.log(`  🤖 Mencoba: ${config.model}`);
+      let raw;
 
-      const raw = result.response.text().trim()
-        .replace(/^```json\s*/i, '')
-        .replace(/^```\s*/i, '')
-        .replace(/```\s*$/i, '');
-
-      try {
-        return JSON.parse(raw);
-      } catch {
-        console.warn('  ⚠️  JSON parse gagal, pakai judul asli');
-        return {
-          title: article.title,
-          content: raw,
-          category: 'IHSG',
-          tags: [],
-          meta_description: article.title,
-          focus_keyword: article.title.split(' ').slice(0, 3).join(' '),
-        };
-      }
-    } catch (err) {
-      if (attempt < 3 && err.message.includes('503')) {
-        const wait = attempt * 15000; // 15s, 30s
-        console.warn(`  ⏳ Server busy, retry ${attempt}/3 dalam ${wait/1000}s...`);
-        await new Promise(r => setTimeout(r, wait));
+      if (config.provider === 'gemini') {
+        raw = await callWithRetry(() => callGemini(config.model, userMessage));
       } else {
-        throw err;
+        raw = await callWithRetry(() => callClaude(config.model, userMessage));
       }
+
+      const result = parseJSON(raw, article);
+      if (config.provider === 'claude') {
+        console.log(`  ✳️  Menggunakan Claude sebagai fallback`);
+      }
+      return result;
+
+    } catch (err) {
+      const is503 = err.status === 503
+        || (err.message || '').includes('503')
+        || (err.message || '').includes('overloaded');
+
+      console.warn(`  ❌ ${config.model} gagal: ${err.status || err.message}`);
+
+      if (is503) openCircuit(key);
+      // lanjut ke model berikutnya
     }
   }
+
+  throw new Error('Semua provider gagal. Cek API key dan koneksi.');
 }
 
 // ─────────────────────────────────────────
@@ -185,7 +296,6 @@ async function getOrCreateTags(tagNames, auth, wpUrl) {
     if (!name || !name.trim()) continue;
     const cleanName = name.trim().toLowerCase();
 
-    // Cek apakah tag sudah ada
     const searchRes = await fetch(
       `${wpUrl}/wp-json/wp/v2/tags?search=${encodeURIComponent(cleanName)}&per_page=5`,
       { headers: { 'Authorization': `Basic ${auth}` } }
@@ -196,11 +306,10 @@ async function getOrCreateTags(tagNames, auth, wpUrl) {
     if (found) {
       tagIds.push(found.id);
     } else {
-      // Buat tag baru
       const createRes = await fetch(`${wpUrl}/wp-json/wp/v2/tags`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type':  'application/json',
           'Authorization': `Basic ${auth}`,
         },
         body: JSON.stringify({ name: cleanName }),
@@ -224,14 +333,11 @@ async function postToWordPress(article, rewritten) {
 
   const auth = Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString('base64');
 
-  // Resolve category ID
   const categoryName = rewritten.category || 'IHSG';
   const categoryId = CATEGORY_MAP[categoryName] || CATEGORY_MAP['IHSG'];
 
-  // Resolve atau buat tag IDs
   const tagIds = await getOrCreateTags(rewritten.tags || [], auth, WP_URL);
 
-  // Format konten HTML
   const htmlContent = rewritten.content
     .split('\n\n')
     .filter(p => p.trim())
@@ -248,12 +354,10 @@ async function postToWordPress(article, rewritten) {
     categories: [categoryId],
     tags:       tagIds,
     meta: {
-      // Rank Math SEO fields
-      rank_math_focus_keyword:  rewritten.focus_keyword || '',
-      rank_math_description:    rewritten.meta_description || '',
-      // Source tracking
-      _source_url:  article.link,
-      _source_name: article.source,
+      rank_math_focus_keyword: rewritten.focus_keyword || '',
+      rank_math_description:   rewritten.meta_description || '',
+      _source_url:             article.link,
+      _source_name:            article.source,
     },
   };
 
@@ -313,7 +417,7 @@ async function main() {
   for (const article of toProcess) {
     console.log(`▶  ${article.title.substring(0, 60)}...`);
     try {
-      const rewritten = await rewriteWithGemini(article);
+      const rewritten = await rewriteWithFallback(article);  // ← ganti dari rewriteWithGemini
       const wpPost = await postToWordPress(article, rewritten);
 
       processed.add(article.link);
