@@ -18,7 +18,7 @@ const RSS_FEEDS = [
 ];
 
 const MAX_ARTICLES_PER_RUN = 8;
-const DELAY_BETWEEN_REQUESTS = 2500;
+const DELAY_BETWEEN_REQUESTS = 8000;
 const PROCESSED_FILE = path.join(__dirname, 'processed_urls.json');
 
 // Mapping nama kategori → ID WordPress
@@ -129,37 +129,48 @@ Balas HANYA dengan JSON valid tanpa markdown, tanpa backtick:
 }`;
 
 async function rewriteWithGemini(article) {
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY, {
-  apiVersion: 'v1'
-});
-const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
   const userMessage = `Sumber: ${article.source}
 Judul asli: ${article.title}
 Isi: ${article.content.substring(0, 1500)}`;
 
-  const result = await model.generateContent([
-    { text: SYSTEM_PROMPT },
-    { text: userMessage },
-  ]);
+  // Retry sampai 3x jika 503
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const result = await model.generateContent([
+        { text: SYSTEM_PROMPT },
+        { text: userMessage },
+      ]);
 
-  const raw = result.response.text().trim()
-    .replace(/^```json\s*/i, '')
-    .replace(/^```\s*/i, '')
-    .replace(/```\s*$/i, '');
+      const raw = result.response.text().trim()
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/```\s*$/i, '');
 
-  try {
-    return JSON.parse(raw);
-  } catch {
-    console.warn('  ⚠️  JSON parse gagal, pakai judul asli');
-    return {
-      title: article.title,
-      content: raw,
-      category: 'IHSG',
-      tags: [],
-      meta_description: article.title,
-      focus_keyword: article.title.split(' ').slice(0, 3).join(' '),
-    };
+      try {
+        return JSON.parse(raw);
+      } catch {
+        console.warn('  ⚠️  JSON parse gagal, pakai judul asli');
+        return {
+          title: article.title,
+          content: raw,
+          category: 'IHSG',
+          tags: [],
+          meta_description: article.title,
+          focus_keyword: article.title.split(' ').slice(0, 3).join(' '),
+        };
+      }
+    } catch (err) {
+      if (attempt < 3 && err.message.includes('503')) {
+        const wait = attempt * 15000; // 15s, 30s
+        console.warn(`  ⏳ Server busy, retry ${attempt}/3 dalam ${wait/1000}s...`);
+        await new Promise(r => setTimeout(r, wait));
+      } else {
+        throw err;
+      }
+    }
   }
 }
 
