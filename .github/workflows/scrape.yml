@@ -36,10 +36,11 @@ jobs:
           WP_APP_PASSWORD:  ${{ secrets.WP_APP_PASSWORD }}
         run: node scraper.js
 
-      - name: Commit processed_urls.json
+      - name: Commit processed URLs
         run: |
           git config --local user.email "scraper@gussur.com"
           git config --local user.name "gussur-scraper"
+          git pull --rebase origin main
           git add processed_urls.json
-          git diff --staged --quiet || git commit -m "chore: update processed URLs [skip ci]"
+          git diff --staged --quiet || git commit -m "chore: update processed_urls"
           git push
