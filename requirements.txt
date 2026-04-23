@@ -1,0 +1,4 @@
+pytrends
+pandas
+google-generativeai
+requests
