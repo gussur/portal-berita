@@ -26,5 +26,6 @@ jobs:
         env:
           WP_USER: ${{ secrets.WP_USER_GUSSUR }}
           WP_APP_PASS: ${{ secrets.WP_APP_PASS_GUSSUR }}
+          UNSPLASH_API_KEY: ${{ secrets.UNSPLASH_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main_gussur.py
