@@ -11,8 +11,8 @@ from pytrends.request import TrendReq
 # ==========================================
 WP_URL_POSTS = "https://gussur.com/wp-json/wp/v2/posts"
 WP_URL_MEDIA = "https://gussur.com/wp-json/wp/v2/media"
-WP_USER = os.environ.get("WP_USER_GUSSUR")
-WP_APP_PASS = os.environ.get("WP_APP_PASS_GUSSUR")
+WP_USER = os.environ.get("WP_USER")
+WP_APP_PASS = os.environ.get("WP_APP_PASS")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 UNSPLASH_API_KEY = os.environ.get("UNSPLASH_API_KEY")
 
