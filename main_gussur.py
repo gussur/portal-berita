@@ -99,7 +99,8 @@ def get_and_upload_image(keyword):
     auth = (WP_USER, WP_APP_PASS)
     headers = {
         'Content-Type': 'image/jpeg',
-        'Content-Disposition': f'attachment; filename="{clean_keyword.replace(" ", "-")}.jpg"'
+        'Content-Disposition': f'attachment; filename="{clean_keyword.replace(" ", "-")}.jpg"',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
     wp_response = requests.post(WP_URL_MEDIA, headers=headers, auth=auth, data=img_data)
