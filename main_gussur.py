@@ -68,13 +68,24 @@ def generate_article(topic, category):
 # 3. CARI & UPLOAD GAMBAR UNSPLASH
 # ==========================================
 def get_and_upload_image(keyword):
-    print(f"Mencari gambar untuk keyword: {keyword}...")
+    # Ambil kata pertama/utama saja dari keyword jika terlalu panjang (sebelum tanda koma)
+    clean_keyword = keyword.split(',')[0].strip()
+    print(f"Mencari gambar untuk keyword: {clean_keyword}...")
+    
     if not UNSPLASH_API_KEY:
         print("API Key Unsplash tidak ditemukan!")
         return None
         
-    unsplash_url = f"[https://api.unsplash.com/search/photos?page=1&query=](https://api.unsplash.com/search/photos?page=1&query=){keyword}&client_id={UNSPLASH_API_KEY}&orientation=landscape"
-    response = requests.get(unsplash_url)
+    # Menggunakan metode 'params' agar lebih aman dari salah copy-paste URL
+    unsplash_url = "https://api.unsplash.com/search/photos"
+    params = {
+        "page": 1,
+        "query": clean_keyword,
+        "client_id": UNSPLASH_API_KEY,
+        "orientation": "landscape"
+    }
+    
+    response = requests.get(unsplash_url, params=params)
     
     if response.status_code != 200 or not response.json()['results']:
         print("Gambar tidak ditemukan di Unsplash.")
@@ -86,7 +97,7 @@ def get_and_upload_image(keyword):
     auth = (WP_USER, WP_APP_PASS)
     headers = {
         'Content-Type': 'image/jpeg',
-        'Content-Disposition': f'attachment; filename="{keyword.replace(" ", "-")}.jpg"'
+        'Content-Disposition': f'attachment; filename="{clean_keyword.replace(" ", "-")}.jpg"'
     }
     
     wp_response = requests.post(WP_URL_MEDIA, headers=headers, auth=auth, data=img_data)
@@ -102,6 +113,7 @@ def get_and_upload_image(keyword):
 # ==========================================
 # 4. PUSH KE WORDPRESS
 # ==========================================
+# (Fungsi push_to_wordpress TETAP SAMA seperti sebelumnya)
 def push_to_wordpress(article_data, wp_category_id, media_id):
     if not article_data:
         return
@@ -151,8 +163,8 @@ if __name__ == "__main__":
         article_data = generate_article(topic, cat_name)
         
         if article_data:
-            search_keyword = article_data.get('focus_keyword', topic)
-            media_id = get_and_upload_image(search_keyword)
+            # Gunakan 'topic' utama untuk mencari gambar agar lebih akurat di Unsplash
+            media_id = get_and_upload_image(topic)
             
             print(f"🚀 Push draf {cat_name} ke WordPress...")
             push_to_wordpress(article_data, cat_id, media_id)
