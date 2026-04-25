@@ -1,45 +1,88 @@
 import os
 import json
 import requests
-import google.generativeai as genai
+from google import genai
 from pytrends.request import TrendReq
 
 # ==========================================
 # KONFIGURASI API & KREDENSIAL
 # ==========================================
 WP_URL_POSTS = "https://gussur.com/wp-json/wp/v2/posts"
-WP_URL_MEDIA = "https://gussur.com/wp-json/wp/v2/media" # Endpoint baru untuk upload gambar
+WP_URL_MEDIA = "https://gussur.com/wp-json/wp/v2/media"
 WP_USER = os.environ.get("WP_USER_GUSSUR")
 WP_APP_PASS = os.environ.get("WP_APP_PASS_GUSSUR")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-UNSPLASH_API_KEY = os.environ.get("UNSPLASH_API_KEY") # API Key Unsplash
+UNSPLASH_API_KEY = os.environ.get("UNSPLASH_API_KEY")
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-2.5-flash')
-
-# ... [Fungsi get_trending_sports_topic() & generate_article() TETAP SAMA seperti sebelumnya] ...
+# Menggunakan SDK Gemini terbaru
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ==========================================
-# FUNGSI BARU: CARI & UPLOAD GAMBAR
+# 1. AMBIL TRENDING TOPIC
+# ==========================================
+def get_trending_sports_topic():
+    try:
+        pytrends = TrendReq(hl='id-ID', tz=420)
+        trending_searches = pytrends.trending_searches(pn='indonesia')
+        keywords = ['marathon', 'lari', 'sepeda', 'tour', 'juara', 'olimpiade', 'travel']
+        
+        for index, row in trending_searches.iterrows():
+            topic = row[0].lower()
+            if any(keyword in topic for keyword in keywords):
+                return topic
+    except Exception as e:
+        print(f"Pytrends error: {e}")
+        
+    return "Boston Marathon" # Fallback topic
+
+# ==========================================
+# 2. GENERATE ARTIKEL
+# ==========================================
+def generate_article(topic, category):
+    system_prompt = f"""
+    Kamu adalah penulis untuk blog gussur.com. Gaya tulisanmu:
+    1. Sudut Pandang: Orang pertama ("aku" atau "saya"), intim, seperti catatan harian atau jurnal perjalanan.
+    2. Tone: Reflektif, tenang, naratif, tidak terburu-buru.
+    3. Konten: Memadukan fakta (sejarah, data, event) dengan perenungan personal dan memori.
+    4. Panjang artikel: Sekitar 1000 kata.
+    5. Gunakan sub-judul (heading) yang puitis namun deskriptif.
+    
+    Tugas: Tulis artikel blog tentang '{topic}' dari sudut pandang kategori '{category}'.
+    
+    Berikan output murni dalam format JSON (tanpa markdown block ```json) dengan key: 
+    "title", "content" (format HTML dasar seperti <h2>, <p>), "seo_title", "seo_desc", "focus_keyword".
+    """
+    
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=system_prompt,
+        )
+        clean_json = response.text.strip().removeprefix('```json').removesuffix('```').strip()
+        return json.loads(clean_json)
+    except Exception as e:
+        print(f"Error parsing Gemini response untuk kategori {category}: {e}")
+        return None
+
+# ==========================================
+# 3. CARI & UPLOAD GAMBAR UNSPLASH
 # ==========================================
 def get_and_upload_image(keyword):
     print(f"Mencari gambar untuk keyword: {keyword}...")
-    
-    # 1. Cari gambar di Unsplash
-    unsplash_url = f"https://api.unsplash.com/search/photos?page=1&query={keyword}&client_id={UNSPLASH_API_KEY}&orientation=landscape"
+    if not UNSPLASH_API_KEY:
+        print("API Key Unsplash tidak ditemukan!")
+        return None
+        
+    unsplash_url = f"[https://api.unsplash.com/search/photos?page=1&query=](https://api.unsplash.com/search/photos?page=1&query=){keyword}&client_id={UNSPLASH_API_KEY}&orientation=landscape"
     response = requests.get(unsplash_url)
     
     if response.status_code != 200 or not response.json()['results']:
         print("Gambar tidak ditemukan di Unsplash.")
         return None
         
-    # Ambil URL gambar pertama
     image_url = response.json()['results'][0]['urls']['regular']
-    
-    # 2. Download gambar tersebut sementara
     img_data = requests.get(image_url).content
     
-    # 3. Upload ke WordPress Media Library
     auth = (WP_USER, WP_APP_PASS)
     headers = {
         'Content-Type': 'image/jpeg',
@@ -57,7 +100,7 @@ def get_and_upload_image(keyword):
         return None
 
 # ==========================================
-# UPDATE FUNGSI PUSH KE WORDPRESS
+# 4. PUSH KE WORDPRESS
 # ==========================================
 def push_to_wordpress(article_data, wp_category_id, media_id):
     if not article_data:
@@ -78,7 +121,6 @@ def push_to_wordpress(article_data, wp_category_id, media_id):
         }
     }
     
-    # Jika ada gambar, kaitkan ke artikel
     if media_id:
         payload['featured_media'] = media_id
     
@@ -108,12 +150,12 @@ if __name__ == "__main__":
         print(f"⚙️ Membuat artikel untuk kategori: {cat_name}...")
         article_data = generate_article(topic, cat_name)
         
-        # Ekstrak keyword unik untuk tiap gambar (bisa pakai fokus keyword dari AI)
-        search_keyword = article_data.get('focus_keyword', topic)
-        media_id = get_and_upload_image(search_keyword)
-        
-        print(f"🚀 Push draf {cat_name} ke WordPress...")
-        push_to_wordpress(article_data, cat_id, media_id)
+        if article_data:
+            search_keyword = article_data.get('focus_keyword', topic)
+            media_id = get_and_upload_image(search_keyword)
+            
+            print(f"🚀 Push draf {cat_name} ke WordPress...")
+            push_to_wordpress(article_data, cat_id, media_id)
         print("-" * 30)
         
     print("🎉 Pipeline Selesai!")
