@@ -1,4 +1,4 @@
 pytrends
 pandas
-google-generativeai
+google-genai
 requests
