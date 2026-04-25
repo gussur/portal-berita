@@ -1,7 +1,9 @@
 import os
 import json
+import time
 import requests
 from google import genai
+from google.genai import types
 from pytrends.request import TrendReq
 
 # ==========================================
@@ -14,7 +16,6 @@ WP_APP_PASS = os.environ.get("WP_APP_PASS_GUSSUR")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 UNSPLASH_API_KEY = os.environ.get("UNSPLASH_API_KEY")
 
-# Menggunakan SDK Gemini terbaru
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ==========================================
@@ -33,33 +34,36 @@ def get_trending_sports_topic():
     except Exception as e:
         print(f"Pytrends error: {e}")
         
-    return "Boston Marathon" # Fallback topic
+    return "Boston Marathon" 
 
 # ==========================================
-# 2. GENERATE ARTIKEL
+# 2. GENERATE ARTIKEL (DENGAN MODE JSON KETAT)
 # ==========================================
 def generate_article(topic, category):
     system_prompt = f"""
     Kamu adalah penulis untuk blog gussur.com. Gaya tulisanmu:
-    1. Sudut Pandang: Orang pertama ("aku" atau "saya"), intim, seperti catatan harian atau jurnal perjalanan.
-    2. Tone: Reflektif, tenang, naratif, tidak terburu-buru.
-    3. Konten: Memadukan fakta (sejarah, data, event) dengan perenungan personal dan memori.
+    1. Sudut Pandang: Orang pertama ("aku" atau "saya"), intim, seperti catatan harian.
+    2. Tone: Reflektif, tenang, naratif.
+    3. Konten: Memadukan fakta (sejarah, data) dengan perenungan personal.
     4. Panjang artikel: Sekitar 1000 kata.
-    5. Gunakan sub-judul (heading) yang puitis namun deskriptif.
+    5. Gunakan sub-judul HTML (<h2>) yang puitis.
     
     Tugas: Tulis artikel blog tentang '{topic}' dari sudut pandang kategori '{category}'.
     
-    Berikan output murni dalam format JSON (tanpa markdown block ```json) dengan key: 
-    "title", "content" (format HTML dasar seperti <h2>, <p>), "seo_title", "seo_desc", "focus_keyword".
+    Output harus berupa JSON dengan key persis seperti ini: 
+    "title", "content" (format HTML), "seo_title", "seo_desc", "focus_keyword".
     """
     
     try:
+        # Memaksa Gemini untuk mengeluarkan JSON murni (anti-error parsing)
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=system_prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+            )
         )
-        clean_json = response.text.strip().removeprefix('```json').removesuffix('```').strip()
-        return json.loads(clean_json)
+        return json.loads(response.text)
     except Exception as e:
         print(f"Error parsing Gemini response untuk kategori {category}: {e}")
         return None
@@ -68,7 +72,6 @@ def generate_article(topic, category):
 # 3. CARI & UPLOAD GAMBAR UNSPLASH
 # ==========================================
 def get_and_upload_image(keyword):
-    # Ambil kata pertama/utama saja dari keyword jika terlalu panjang (sebelum tanda koma)
     clean_keyword = keyword.split(',')[0].strip()
     print(f"Mencari gambar untuk keyword: {clean_keyword}...")
     
@@ -76,7 +79,6 @@ def get_and_upload_image(keyword):
         print("API Key Unsplash tidak ditemukan!")
         return None
         
-    # Menggunakan metode 'params' agar lebih aman dari salah copy-paste URL
     unsplash_url = "https://api.unsplash.com/search/photos"
     params = {
         "page": 1,
@@ -107,13 +109,12 @@ def get_and_upload_image(keyword):
         print(f"✅ Gambar berhasil diupload ke WP (Media ID: {media_id})")
         return media_id
     else:
-        print("❌ Gagal upload gambar ke WP.")
+        print(f"❌ Gagal upload gambar ke WP. Status: {wp_response.status_code}, Response: {wp_response.text}")
         return None
 
 # ==========================================
 # 4. PUSH KE WORDPRESS
 # ==========================================
-# (Fungsi push_to_wordpress TETAP SAMA seperti sebelumnya)
 def push_to_wordpress(article_data, wp_category_id, media_id):
     if not article_data:
         return
@@ -163,11 +164,13 @@ if __name__ == "__main__":
         article_data = generate_article(topic, cat_name)
         
         if article_data:
-            # Gunakan 'topic' utama untuk mencari gambar agar lebih akurat di Unsplash
             media_id = get_and_upload_image(topic)
             
             print(f"🚀 Push draf {cat_name} ke WordPress...")
             push_to_wordpress(article_data, cat_id, media_id)
+            
+        print("⏳ Jeda 3 detik untuk menghindari blokir dari server...")
+        time.sleep(3) # <--- Ini penangkal Error 429
         print("-" * 30)
         
     print("🎉 Pipeline Selesai!")
