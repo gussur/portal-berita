@@ -1,36 +1,43 @@
 // scraper.js — Portal Berita Ekonomi gussur.com
-// Alur: RSS → dedup → Gemini rewrite → WordPress draft
+// Alur: RSS → dedup → Gemini rewrite → data/berita.json → git push → Vercel redeploy
 
 const Parser = require('rss-parser');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
 // ─────────────────────────────────────────
 // KONFIGURASI
 // ─────────────────────────────────────────
 
 const RSS_FEEDS = [
-  { name: 'Google News: IHSG',    url: 'https://news.google.com/rss/search?q=IHSG+saham&hl=id&gl=ID&ceid=ID:id' },
-  { name: 'Google News: Ekonomi', url: 'https://news.google.com/rss/search?q=ekonomi+Indonesia+pasar+modal&hl=id&gl=ID&ceid=ID:id' },
-  { name: 'Google News: IDX',     url: 'https://news.google.com/rss/search?q=Bursa+Efek+Indonesia+emiten&hl=id&gl=ID&ceid=ID:id' },
-  { name: 'Google News: Rupiah',  url: 'https://news.google.com/rss/search?q=rupiah+inflasi+BI+rate&hl=id&gl=ID&ceid=ID:id' },
+  // ── IHSG & Pasar Modal ──────────────────
+  { name: 'Kontan: Investasi',          url: 'https://rss.kontan.co.id/category/investasi',                                                              category: 'IHSG'      },
+  { name: 'CNBC Indonesia: Market',     url: 'https://www.cnbcindonesia.com/rss/market',                                                                 category: 'IHSG'      },
+
+  // ── Emiten ──────────────────────────────
+  { name: 'Kontan: Emiten',             url: 'https://rss.kontan.co.id/category/emiten',                                                                 category: 'Emiten'    },
+  { name: 'Bisnis: Emiten',             url: 'https://rss.bisnis.com/feed/rss/market/emiten',                                                            category: 'Emiten'    },
+
+  // ── Makro ────────────────────────────────
+  { name: 'Kontan: Makro Ekonomi',      url: 'https://rss.kontan.co.id/category/nasional',                                                               category: 'Makro'     },
+  { name: 'CNBC Indonesia: Ekonomi',    url: 'https://www.cnbcindonesia.com/rss/economy',                                                                category: 'Makro'     },
+  { name: 'Bloomberg Technoz',          url: 'https://news.google.com/rss/search?q=site:bloombergtechnoz.com&hl=id&gl=ID&ceid=ID:id',                    category: 'Makro'     },
+
+  // ── Komoditas ────────────────────────────
+  { name: 'Kontan: Komoditas',          url: 'https://rss.kontan.co.id/category/komoditas',                                                              category: 'Komoditas' },
+  { name: 'CNBC Indonesia: Komoditas',  url: 'https://www.cnbcindonesia.com/rss/commodity',                                                              category: 'Komoditas' },
+
+  // ── Obligasi & Keuangan ──────────────────
+  { name: 'Bisnis: Moneter',            url: 'https://rss.bisnis.com/feed/rss/finansial/moneter',                                                        category: 'Obligasi'  },
+  { name: 'Kontan: Perbankan',          url: 'https://rss.kontan.co.id/category/perbankan',                                                              category: 'Obligasi'  },
 ];
 
-const MAX_ARTICLES_PER_RUN = 8;
+const MAX_PER_CATEGORY    = 2; // 5 kategori × 2 = 10 artikel/hari
 const DELAY_BETWEEN_REQUESTS = 2500;
-const PROCESSED_FILE = path.join(__dirname, 'processed_urls.json');
-
-// Mapping nama kategori → ID WordPress
-const CATEGORY_MAP = {
-  'IHSG':      606,
-  'Emiten':    607,
-  'Makro':     608,
-  'Komoditas': 609,
-  'Obligasi':  610,
-};
-
-const EKONOMI_PARENT_ID = null;
+const PROCESSED_FILE      = path.join(__dirname, 'processed_urls.json');
+const OUTPUT_FILE         = path.join(__dirname, 'data', 'berita.json');
 
 // ─────────────────────────────────────────
 // DEDUP
@@ -55,7 +62,7 @@ function saveProcessed(urlSet) {
 // RSS FETCHER
 // ─────────────────────────────────────────
 
-async function fetchFeed(feedUrl, feedName) {
+async function fetchFeed(feedUrl, feedName, category) {
   const parser = new Parser({
     timeout: 10000,
     headers: { 'User-Agent': 'gussur-scraper/1.0' },
@@ -63,11 +70,12 @@ async function fetchFeed(feedUrl, feedName) {
   try {
     const feed = await parser.parseURL(feedUrl);
     return feed.items.map(item => ({
-      title:   (item.title || '').trim(),
-      link:    item.link || '',
-      content: item.contentSnippet || item.summary || item.content || '',
-      pubDate: item.pubDate || new Date().toISOString(),
-      source:  feedName,
+      title:    (item.title || '').trim(),
+      link:     item.link || '',
+      content:  item.contentSnippet || item.summary || item.content || '',
+      pubDate:  item.pubDate || new Date().toISOString(),
+      source:   feedName,
+      category,
     }));
   } catch (err) {
     console.error(`  ⚠️  Gagal ambil ${feedName}: ${err.message}`);
@@ -76,7 +84,7 @@ async function fetchFeed(feedUrl, feedName) {
 }
 
 // ─────────────────────────────────────────
-// SYSTEM PROMPT (shared semua provider)
+// SYSTEM PROMPT
 // ─────────────────────────────────────────
 
 const SYSTEM_PROMPT = `Kamu adalah editor di blog gussur.com — blog ekonomi dan pasar modal Indonesia dengan gaya khas: 
@@ -133,13 +141,13 @@ Balas HANYA dengan JSON valid tanpa markdown, tanpa backtick:
 // ─────────────────────────────────────────
 
 const MODELS = [
-  { provider: 'gemini', model: 'gemini-2.5-flash' },
-  { provider: 'gemini', model: 'gemini-3.1-flash-lite-preview' },
+  { provider: 'gemini', model: 'gemini-2.5-flash-preview-04-17' },
+  { provider: 'gemini', model: 'gemini-2.0-flash' },
   { provider: 'claude', model: 'claude-sonnet-4-20250514' },
 ];
 
-const CIRCUIT_OPEN_MS = 3 * 60 * 1000; // 3 menit
-const circuitBreaker = {};
+const CIRCUIT_OPEN_MS = 3 * 60 * 1000;
+const circuitBreaker  = {};
 
 function isCircuitOpen(key) {
   const state = circuitBreaker[key];
@@ -160,7 +168,6 @@ async function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-// Satu panggilan ke Gemini (raw, tanpa retry)
 async function callGemini(modelName, userMessage) {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
   const model = genAI.getGenerativeModel({ model: modelName });
@@ -171,7 +178,6 @@ async function callGemini(modelName, userMessage) {
   return result.response.text().trim();
 }
 
-// Satu panggilan ke Claude (raw, tanpa retry)
 async function callClaude(modelName, userMessage) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -198,7 +204,6 @@ async function callClaude(modelName, userMessage) {
   return (data.content?.[0]?.text || '').trim();
 }
 
-// Parse JSON dari raw string (Gemini/Claude kadang masih ada backtick)
 function parseJSON(raw, article) {
   const clean = raw
     .replace(/^```json\s*/i, '')
@@ -213,7 +218,7 @@ function parseJSON(raw, article) {
     return {
       title:            article.title,
       content:          clean,
-      category:         'IHSG',
+      category:         article.category || 'IHSG',
       tags:             [],
       meta_description: article.title,
       focus_keyword:    article.title.split(' ').slice(0, 3).join(' '),
@@ -221,7 +226,6 @@ function parseJSON(raw, article) {
   }
 }
 
-// Exponential backoff dengan jitter, max 2 retry per model
 async function callWithRetry(fn, maxRetries = 2) {
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
     try {
@@ -234,13 +238,12 @@ async function callWithRetry(fn, maxRetries = 2) {
       if (!retryable || attempt > maxRetries) throw err;
 
       const backoff = Math.min(1000 * 2 ** (attempt - 1) + Math.random() * 500, 8000);
-      console.warn(`  ⏳ Retry ${attempt}/${maxRetries} dalam ${Math.round(backoff / 1000)}s... (${err.status || err.message})`);
+      console.warn(`  ⏳ Retry ${attempt}/${maxRetries} dalam ${Math.round(backoff / 1000)}s...`);
       await sleep(backoff);
     }
   }
 }
 
-// Main rewrite: coba MODELS secara berurutan dengan circuit breaker
 async function rewriteWithFallback(article) {
   const userMessage = `Sumber: ${article.source}
 Judul asli: ${article.title}
@@ -276,9 +279,7 @@ Isi: ${article.content.substring(0, 1500)}`;
         || (err.message || '').includes('overloaded');
 
       console.warn(`  ❌ ${config.model} gagal: ${err.status || err.message}`);
-
       if (is503) openCircuit(key);
-      // lanjut ke model berikutnya
     }
   }
 
@@ -286,96 +287,43 @@ Isi: ${article.content.substring(0, 1500)}`;
 }
 
 // ─────────────────────────────────────────
-// WORDPRESS POSTER
+// JSON WRITER
 // ─────────────────────────────────────────
 
-async function getOrCreateTags(tagNames, auth, wpUrl) {
-  const tagIds = [];
-
-  for (const name of tagNames) {
-    if (!name || !name.trim()) continue;
-    const cleanName = name.trim().toLowerCase();
-
-    const searchRes = await fetch(
-      `${wpUrl}/wp-json/wp/v2/tags?search=${encodeURIComponent(cleanName)}&per_page=5`,
-      { headers: { 'Authorization': `Basic ${auth}` } }
-    );
-    const existing = await searchRes.json();
-    const found = existing.find(t => t.name.toLowerCase() === cleanName);
-
-    if (found) {
-      tagIds.push(found.id);
-    } else {
-      const createRes = await fetch(`${wpUrl}/wp-json/wp/v2/tags`, {
-        method: 'POST',
-        headers: {
-          'Content-Type':  'application/json',
-          'Authorization': `Basic ${auth}`,
-        },
-        body: JSON.stringify({ name: cleanName }),
-      });
-      if (createRes.ok) {
-        const newTag = await createRes.json();
-        tagIds.push(newTag.id);
-      }
-    }
+function loadExistingBerita() {
+  if (!fs.existsSync(OUTPUT_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(OUTPUT_FILE, 'utf8'));
+  } catch {
+    return [];
   }
-
-  return tagIds;
 }
 
-async function postToWordPress(article, rewritten) {
-  const { WP_URL, WP_USER, WP_APP_PASSWORD } = process.env;
+function saveBerita(articles) {
+  const dir = path.dirname(OUTPUT_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-  if (!WP_URL || !WP_USER || !WP_APP_PASSWORD) {
-    throw new Error('Kredensial WordPress belum diset di environment variables');
+  // Simpan max 200 artikel terbaru
+  const trimmed = articles.slice(0, 200);
+  fs.writeFileSync(OUTPUT_FILE, JSON.stringify(trimmed, null, 2));
+}
+
+function gitCommitAndPush() {
+  try {
+    execSync('git config user.email "scraper@gussur.com"');
+    execSync('git config user.name "gussur-scraper"');
+    execSync('git add data/berita.json processed_urls.json');
+    execSync('git commit -m "chore: update berita otomatis [skip ci]"');
+    execSync('git push');
+    console.log('  📤 Git push berhasil → Vercel akan redeploy');
+  } catch (err) {
+    // Tidak ada perubahan = exit code 1 dari git commit, bukan error fatal
+    if (err.message.includes('nothing to commit')) {
+      console.log('  ℹ️  Tidak ada perubahan untuk di-commit');
+    } else {
+      console.warn(`  ⚠️  Git push gagal: ${err.message}`);
+    }
   }
-
-  const auth = Buffer.from(`${WP_USER}:${WP_APP_PASSWORD}`).toString('base64');
-
-  const categoryName = rewritten.category || 'IHSG';
-  const categoryId = CATEGORY_MAP[categoryName] || CATEGORY_MAP['IHSG'];
-
-  const tagIds = await getOrCreateTags(rewritten.tags || [], auth, WP_URL);
-
-  const htmlContent = rewritten.content
-    .split('\n\n')
-    .filter(p => p.trim())
-    .map(p => `<p>${p.trim()}</p>`)
-    .join('\n');
-
-  const disclaimer = `\n<hr>\n<p><em>Artikel ini dibuat secara otomatis berdasarkan berita dari ${article.source}. Bukan rekomendasi investasi. Selalu lakukan riset mandiri sebelum mengambil keputusan.</em></p>`;
-
-  const payload = {
-    title:      rewritten.title,
-    content:    htmlContent + disclaimer,
-    excerpt:    rewritten.meta_description || '',
-    status:     'draft',
-    categories: [categoryId],
-    tags:       tagIds,
-    meta: {
-      rank_math_focus_keyword: rewritten.focus_keyword || '',
-      rank_math_description:   rewritten.meta_description || '',
-      _source_url:             article.link,
-      _source_name:            article.source,
-    },
-  };
-
-  const res = await fetch(`${WP_URL}/wp-json/wp/v2/posts`, {
-    method: 'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Basic ${auth}`,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`WordPress ${res.status}: ${errText.substring(0, 200)}`);
-  }
-
-  return await res.json();
 }
 
 // ─────────────────────────────────────────
@@ -387,57 +335,87 @@ async function main() {
   console.log(`\n🗞️  gussur.com Scraper — ${startTime.toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB\n`);
 
   const processed = loadProcessed();
-  let candidates = [];
+  const byCategory = {};
 
   for (const feed of RSS_FEEDS) {
     console.log(`📡 Mengambil: ${feed.name}`);
-    const items = await fetchFeed(feed.url, feed.name);
+    const items = await fetchFeed(feed.url, feed.name, feed.category);
     const fresh = items.filter(item =>
       item.link &&
       item.content.length > 20 &&
       !processed.has(item.link)
     );
     console.log(`   → ${fresh.length} artikel baru dari ${items.length} total`);
-    candidates.push(...fresh);
+
+    for (const item of fresh) {
+      const cat = item.category || 'IHSG';
+      if (!byCategory[cat]) byCategory[cat] = [];
+      byCategory[cat].push(item);
+    }
   }
 
-  console.log(`\n📰 Total kandidat: ${candidates.length} artikel`);
+  // Distribusi merata per kategori
+  const toProcess = Object.values(byCategory)
+    .flatMap(items => items.slice(0, MAX_PER_CATEGORY));
 
-  if (candidates.length === 0) {
+  const totalCandidates = Object.values(byCategory).reduce((n, arr) => n + arr.length, 0);
+  console.log(`\n📰 Total kandidat: ${totalCandidates} artikel`);
+  console.log(`⚙️  Memproses ${toProcess.length} artikel (maks ${MAX_PER_CATEGORY}/kategori)...\n`);
+
+  if (toProcess.length === 0) {
     console.log('ℹ️  Tidak ada artikel baru. Selesai.\n');
     return;
   }
 
-  const toProcess = candidates.slice(0, MAX_ARTICLES_PER_RUN);
-  console.log(`⚙️  Memproses ${toProcess.length} artikel...\n`);
-
+  const existingBerita = loadExistingBerita();
   let successCount = 0;
-  let failCount = 0;
+  let failCount    = 0;
+  const newBerita  = [];
 
   for (const article of toProcess) {
     console.log(`▶  ${article.title.substring(0, 60)}...`);
     try {
-      const rewritten = await rewriteWithFallback(article);  // ← ganti dari rewriteWithGemini
-      const wpPost = await postToWordPress(article, rewritten);
+      const rewritten = await rewriteWithFallback(article);
 
+      const entry = {
+        id:               `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        title:            rewritten.title,
+        content:          rewritten.content,
+        category:         rewritten.category,
+        tags:             rewritten.tags || [],
+        meta_description: rewritten.meta_description || '',
+        focus_keyword:    rewritten.focus_keyword || '',
+        source_url:       article.link,
+        source_name:      article.source,
+        pub_date:         article.pubDate,
+        scraped_at:       new Date().toISOString(),
+      };
+
+      newBerita.push(entry);
       processed.add(article.link);
       successCount++;
-      console.log(`   ✅ Draft: "${rewritten.title}"`);
+
+      console.log(`   ✅ "${rewritten.title}"`);
       console.log(`      Kategori: ${rewritten.category} | Tags: ${(rewritten.tags || []).join(', ')}`);
-      console.log(`      SEO: ${rewritten.focus_keyword}`);
     } catch (err) {
       failCount++;
       console.error(`   ❌ Gagal: ${err.message}`);
     }
 
-    await new Promise(r => setTimeout(r, DELAY_BETWEEN_REQUESTS));
+    await sleep(DELAY_BETWEEN_REQUESTS);
   }
 
-  saveProcessed(processed);
+  if (newBerita.length > 0) {
+    // Artikel baru di atas, artikel lama di bawah
+    const merged = [...newBerita, ...existingBerita];
+    saveBerita(merged);
+    saveProcessed(processed);
+    console.log(`\n💾 Disimpan ke data/berita.json (${merged.length} artikel total)`);
+    gitCommitAndPush();
+  }
 
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`\n🏁 Selesai dalam ${duration}s — ${successCount} berhasil, ${failCount} gagal\n`);
-  console.log('📋 Silakan buka WordPress dashboard untuk review dan publish.\n');
 }
 
 main().catch(err => {
