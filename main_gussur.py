@@ -4,7 +4,7 @@ import time
 import requests
 from google import genai
 from google.genai import types
-from pytrends.request import TrendReq
+import feedparser
 
 # ==========================================
 # KONFIGURASI API & KREDENSIAL
@@ -21,20 +21,30 @@ client = genai.Client(api_key=GEMINI_API_KEY)
 # ==========================================
 # 1. AMBIL TRENDING TOPIC
 # ==========================================
+
+
 def get_trending_sports_topic():
+    keywords = ['marathon', 'lari', 'sepeda', 'tour', 'juara', 'olimpiade', 'travel', 
+                'triathlon', 'renang', 'atletik', 'bersepeda', 'balap']
+    
+    feeds = [
+        "https://news.google.com/rss/search?q=olahraga+lari&hl=id&gl=ID&ceid=ID:id",
+        "https://news.google.com/rss/search?q=marathon+indonesia&hl=id&gl=ID&ceid=ID:id",
+        "https://news.google.com/rss/search?q=sport+travel+indonesia&hl=id&gl=ID&ceid=ID:id",
+    ]
+    
     try:
-        pytrends = TrendReq(hl='id-ID', tz=420)
-        trending_searches = pytrends.trending_searches(pn='indonesia')
-        keywords = ['marathon', 'lari', 'sepeda', 'tour', 'juara', 'olimpiade', 'travel']
-        
-        for index, row in trending_searches.iterrows():
-            topic = row[0].lower()
-            if any(keyword in topic for keyword in keywords):
-                return topic
+        for url in feeds:
+            feed = feedparser.parse(url)
+            for entry in feed.entries[:10]:
+                title = entry.title.lower()
+                if any(keyword in title for keyword in keywords):
+                    print(f"Topik ditemukan dari RSS: {entry.title}")
+                    return entry.title
     except Exception as e:
-        print(f"Pytrends error: {e}")
-        
-    return "Boston Marathon" 
+        print(f"RSS error: {e}")
+    
+    return "Lari Pagi di Jakarta"
 
 # ==========================================
 # 2. GENERATE ARTIKEL (DENGAN MODE JSON KETAT)
