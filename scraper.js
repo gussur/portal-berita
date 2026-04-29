@@ -12,26 +12,25 @@ const { execSync } = require('child_process');
 // ─────────────────────────────────────────
 
 const RSS_FEEDS = [
-  // ── IHSG & Pasar Modal ──────────────────
-  { name: 'Kontan: Investasi',          url: 'https://rss.kontan.co.id/category/investasi',                                                              category: 'IHSG'      },
-  { name: 'CNBC Indonesia: Market',     url: 'https://www.cnbcindonesia.com/rss/market',                                                                 category: 'IHSG'      },
+  // ── IHSG ──────────────────────────────────
+  { name: 'Kontan: Pasar Modal',    url: 'https://news.google.com/rss/search?q=site:kontan.co.id+IHSG+saham&hl=id&gl=ID&ceid=ID:id',                  category: 'IHSG'      },
+  { name: 'CNBC: Pasar Modal',      url: 'https://news.google.com/rss/search?q=site:cnbcindonesia.com+IHSG+bursa&hl=id&gl=ID&ceid=ID:id',              category: 'IHSG'      },
 
-  // ── Emiten ──────────────────────────────
-  { name: 'Kontan: Emiten',             url: 'https://rss.kontan.co.id/category/emiten',                                                                 category: 'Emiten'    },
-  { name: 'Bisnis: Emiten',             url: 'https://rss.bisnis.com/feed/rss/market/emiten',                                                            category: 'Emiten'    },
+  // ── Emiten ────────────────────────────────
+  { name: 'Kontan: Emiten',         url: 'https://news.google.com/rss/search?q=site:kontan.co.id+emiten+saham&hl=id&gl=ID&ceid=ID:id',                 category: 'Emiten'    },
+  { name: 'Bisnis: Emiten',         url: 'https://news.google.com/rss/search?q=site:bisnis.com+emiten+laporan+keuangan&hl=id&gl=ID&ceid=ID:id',        category: 'Emiten'    },
 
-  // ── Makro ────────────────────────────────
-  { name: 'Kontan: Makro Ekonomi',      url: 'https://rss.kontan.co.id/category/nasional',                                                               category: 'Makro'     },
-  { name: 'CNBC Indonesia: Ekonomi',    url: 'https://www.cnbcindonesia.com/rss/economy',                                                                category: 'Makro'     },
-  { name: 'Bloomberg Technoz',          url: 'https://news.google.com/rss/search?q=site:bloombergtechnoz.com&hl=id&gl=ID&ceid=ID:id',                    category: 'Makro'     },
+  // ── Makro ─────────────────────────────────
+  { name: 'Kontan: Makro',          url: 'https://news.google.com/rss/search?q=site:kontan.co.id+inflasi+OR+BI+rate+OR+rupiah&hl=id&gl=ID&ceid=ID:id', category: 'Makro'     },
+  { name: 'Bloomberg Technoz',      url: 'https://news.google.com/rss/search?q=site:bloombergtechnoz.com&hl=id&gl=ID&ceid=ID:id',                      category: 'Makro'     },
 
-  // ── Komoditas ────────────────────────────
-  { name: 'Kontan: Komoditas',          url: 'https://rss.kontan.co.id/category/komoditas',                                                              category: 'Komoditas' },
-  { name: 'CNBC Indonesia: Komoditas',  url: 'https://www.cnbcindonesia.com/rss/commodity',                                                              category: 'Komoditas' },
+  // ── Komoditas ─────────────────────────────
+  { name: 'Kontan: Komoditas',      url: 'https://news.google.com/rss/search?q=site:kontan.co.id+komoditas+OR+batu+bara+OR+nikel+OR+CPO&hl=id&gl=ID&ceid=ID:id', category: 'Komoditas' },
+  { name: 'CNBC: Komoditas',        url: 'https://news.google.com/rss/search?q=site:cnbcindonesia.com+komoditas+OR+emas+OR+minyak&hl=id&gl=ID&ceid=ID:id',      category: 'Komoditas' },
 
-  // ── Obligasi & Keuangan ──────────────────
-  { name: 'Bisnis: Moneter',            url: 'https://rss.bisnis.com/feed/rss/finansial/moneter',                                                        category: 'Obligasi'  },
-  { name: 'Kontan: Perbankan',          url: 'https://rss.kontan.co.id/category/perbankan',                                                              category: 'Obligasi'  },
+  // ── Obligasi ──────────────────────────────
+  { name: 'Bisnis: Obligasi',       url: 'https://news.google.com/rss/search?q=site:bisnis.com+obligasi+OR+SBN+OR+yield&hl=id&gl=ID&ceid=ID:id',      category: 'Obligasi'  },
+  { name: 'CNBC: Perbankan',        url: 'https://news.google.com/rss/search?q=site:cnbcindonesia.com+BI+rate+OR+suku+bunga+OR+perbankan&hl=id&gl=ID&ceid=ID:id', category: 'Obligasi'  },
 ];
 
 const MAX_PER_CATEGORY    = 2; // 5 kategori × 2 = 10 artikel/hari
@@ -141,8 +140,8 @@ Balas HANYA dengan JSON valid tanpa markdown, tanpa backtick:
 // ─────────────────────────────────────────
 
 const MODELS = [
-  { provider: 'gemini', model: 'gemini-2.5-flash-preview-04-17' },
   { provider: 'gemini', model: 'gemini-2.0-flash' },
+  { provider: 'gemini', model: 'gemini-1.5-flash' },
   { provider: 'claude', model: 'claude-sonnet-4-20250514' },
 ];
 
