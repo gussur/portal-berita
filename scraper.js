@@ -140,8 +140,7 @@ Balas HANYA dengan JSON valid tanpa markdown, tanpa backtick:
 // ─────────────────────────────────────────
 
 const MODELS = [
-  { provider: 'gemini', model: 'gemini-2.0-flash' },
-  { provider: 'gemini', model: 'gemini-1.5-flash' },
+  { provider: 'gemini', model: 'gemini-2.5-flash' },
   { provider: 'claude', model: 'claude-sonnet-4-20250514' },
 ];
 
