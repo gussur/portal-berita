@@ -311,7 +311,7 @@ function gitCommitAndPush() {
     execSync('git config user.email "scraper@gussur.com"');
     execSync('git config user.name "gussur-scraper"');
     execSync('git add data/berita.json processed_urls.json');
-    execSync('git commit -m "chore: update berita otomatis [skip ci]"');
+    execSync('git commit -m "chore: update berita otomatis [skip vercel]"');
     execSync('git push');
     console.log('  📤 Git push berhasil → Vercel akan redeploy');
   } catch (err) {
