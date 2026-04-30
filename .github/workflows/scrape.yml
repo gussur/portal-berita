@@ -1,14 +1,19 @@
 name: Scrape Berita Ekonomi
+
 on:
   schedule:
-    - cron: '0 22 * * *'
+    - cron: '0 23 * * *'   # 06.00 WIB — sebelum market buka
+    - cron: '30 9 * * *'   # 16.30 WIB — sesudah market tutup
   workflow_dispatch:
 
 jobs:
   scrape:
+    # Jangan jalan kalau commit dari scraper sendiri (mencegah loop)
+    if: "!contains(github.event.head_commit.message, 'update berita otomatis')"
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -23,24 +28,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: List available models
-        run: |
-          curl -s "https://generativelanguage.googleapis.com/v1beta/models?key=${{ secrets.GEMINI_API_KEY }}" | grep '"name"'
-
       - name: Jalankan scraper
         env:
-          GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
-          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
-          WP_URL:           ${{ secrets.WP_URL }}
-          WP_USER:          ${{ secrets.WP_USER }}
-          WP_APP_PASSWORD:  ${{ secrets.WP_APP_PASSWORD }}
+          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: node scraper.js
-
-      - name: Commit processed URLs
-        run: |
-          git config --local user.email "scraper@gussur.com"
-          git config --local user.name "gussur-scraper"
-          git pull --rebase origin main
-          git add processed_urls.json
-          git diff --staged --quiet || git commit -m "chore: update processed_urls"
-          git push
