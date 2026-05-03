@@ -10,44 +10,75 @@ import feedparser
 # KONFIGURASI API & KREDENSIAL
 # ==========================================
 WP_URL_POSTS = "https://gussur.com/wp-json/wp/v2/posts"
-WP_URL_MEDIA = "https://gussur.com/wp-json/wp/v2/media"
 WP_USER = os.environ.get("WP_USER")
 WP_APP_PASS = os.environ.get("WP_APP_PASS")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-UNSPLASH_API_KEY = os.environ.get("UNSPLASH_API_KEY")
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ==========================================
-# 1. AMBIL TRENDING TOPIC
+# 1. AMBIL TRENDING TOPIC PER KATEGORI
 # ==========================================
+CATEGORY_FEEDS = {
+    "Life": {
+        "feeds": [
+            "https://news.google.com/rss/search?q=atlet+indonesia+profil&hl=id&gl=ID&ceid=ID:id",
+            "https://news.google.com/rss/search?q=pelari+indonesia&hl=id&gl=ID&ceid=ID:id",
+            "https://news.google.com/rss/search?q=kisah+atlet+juara&hl=id&gl=ID&ceid=ID:id",
+        ],
+        "keywords": ['atlet', 'pelari', 'juara', 'kisah', 'profil', 'sang', 'ia', 'dia', 'namanya'],
+        "fallback": "Pelari Muda Indonesia yang Menginspirasi"
+    },
+    "Memories": {
+        "feeds": [
+            "https://news.google.com/rss/search?q=kenangan+olahraga+indonesia&hl=id&gl=ID&ceid=ID:id",
+            "https://news.google.com/rss/search?q=sejarah+marathon+indonesia&hl=id&gl=ID&ceid=ID:id",
+            "https://news.google.com/rss/search?q=nostalgia+lari+sepeda&hl=id&gl=ID&ceid=ID:id",
+        ],
+        "keywords": ['pertama', 'dulu', 'sejarah', 'kenangan', 'pernah', 'tahun', 'masa', 'awal', 'nostalgia'],
+        "fallback": "Pertama Kali Menyentuh Garis Finish"
+    },
+    "Travels": {
+        "feeds": [
+            "https://news.google.com/rss/search?q=rute+lari+wisata+indonesia&hl=id&gl=ID&ceid=ID:id",
+            "https://news.google.com/rss/search?q=marathon+event+indonesia+2025&hl=id&gl=ID&ceid=ID:id",
+            "https://news.google.com/rss/search?q=travel+sport+destinasi&hl=id&gl=ID&ceid=ID:id",
+        ],
+        "keywords": ['rute', 'destinasi', 'kota', 'jalan', 'trail', 'event', 'race', 'lomba', 'wisata'],
+        "fallback": "Lari di Antara Kota yang Belum Pernah Kau Kenal"
+    },
+    "Review": {
+        "feeds": [
+            "https://news.google.com/rss/search?q=review+sepatu+lari+2025&hl=id&gl=ID&ceid=ID:id",
+            "https://news.google.com/rss/search?q=rekomendasi+perlengkapan+lari&hl=id&gl=ID&ceid=ID:id",
+            "https://news.google.com/rss/search?q=aplikasi+olahraga+terbaik&hl=id&gl=ID&ceid=ID:id",
+        ],
+        "keywords": ['review', 'rekomendasi', 'terbaik', 'sepatu', 'aplikasi', 'gear', 'produk', 'beli', 'pakai'],
+        "fallback": "Sepatu Lari yang Menemani Ribuan Kilometer"
+    },
+}
 
-
-def get_trending_sports_topic():
-    keywords = ['marathon', 'lari', 'sepeda', 'tour', 'juara', 'olimpiade', 'travel', 
-                'triathlon', 'renang', 'atletik', 'bersepeda', 'balap']
-    
-    feeds = [
-        "https://news.google.com/rss/search?q=olahraga+lari&hl=id&gl=ID&ceid=ID:id",
-        "https://news.google.com/rss/search?q=marathon+indonesia&hl=id&gl=ID&ceid=ID:id",
-        "https://news.google.com/rss/search?q=sport+travel+indonesia&hl=id&gl=ID&ceid=ID:id",
-    ]
+def get_topic_for_category(category):
+    config = CATEGORY_FEEDS.get(category)
+    if not config:
+        return "Lari Pagi di Jakarta"
     
     try:
-        for url in feeds:
+        for url in config["feeds"]:
             feed = feedparser.parse(url)
             for entry in feed.entries[:10]:
                 title = entry.title.lower()
-                if any(keyword in title for keyword in keywords):
-                    print(f"Topik ditemukan dari RSS: {entry.title}")
+                if any(keyword in title for keyword in config["keywords"]):
+                    print(f"Topik [{category}] ditemukan: {entry.title}")
                     return entry.title
     except Exception as e:
-        print(f"RSS error: {e}")
+        print(f"RSS error untuk {category}: {e}")
     
-    return "Lari Pagi di Jakarta"
+    print(f"Topik [{category}] pakai fallback: {config['fallback']}")
+    return config["fallback"]
 
 # ==========================================
-# 2. GENERATE ARTIKEL (DENGAN MODE JSON KETAT)
+# 2. GENERATE ARTIKEL
 # ==========================================
 def generate_article(topic, category):
     system_prompt = f"""
@@ -65,7 +96,6 @@ def generate_article(topic, category):
     """
     
     try:
-        # Memaksa Gemini untuk mengeluarkan JSON murni (anti-error parsing)
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=system_prompt,
@@ -79,61 +109,16 @@ def generate_article(topic, category):
         return None
 
 # ==========================================
-# 3. CARI & UPLOAD GAMBAR UNSPLASH
+# 3. PUSH KE WORDPRESS
 # ==========================================
-def get_and_upload_image(keyword):
-    clean_keyword = keyword.split(',')[0].strip()
-    print(f"Mencari gambar untuk keyword: {clean_keyword}...")
-    
-    if not UNSPLASH_API_KEY:
-        print("API Key Unsplash tidak ditemukan!")
-        return None
-        
-    unsplash_url = "https://api.unsplash.com/search/photos"
-    params = {
-        "page": 1,
-        "query": clean_keyword,
-        "client_id": UNSPLASH_API_KEY,
-        "orientation": "landscape"
-    }
-    
-    response = requests.get(unsplash_url, params=params)
-    
-    if response.status_code != 200 or not response.json()['results']:
-        print("Gambar tidak ditemukan di Unsplash.")
-        return None
-        
-    image_url = response.json()['results'][0]['urls']['regular']
-    img_data = requests.get(image_url).content
-    
-    auth = (WP_USER, WP_APP_PASS)
-    headers = {
-        'Content-Type': 'image/jpeg',
-        'Content-Disposition': f'attachment; filename="{clean_keyword.replace(" ", "-")}.jpg"',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-    
-    wp_response = requests.post(WP_URL_MEDIA, headers=headers, auth=auth, data=img_data)
-    
-    if wp_response.status_code == 201:
-        media_id = wp_response.json()['id']
-        print(f"✅ Gambar berhasil diupload ke WP (Media ID: {media_id})")
-        return media_id
-    else:
-        print(f"❌ Gagal upload gambar ke WP. Status: {wp_response.status_code}, Response: {wp_response.text}")
-        return None
-
-# ==========================================
-# 4. PUSH KE WORDPRESS
-# ==========================================
-def push_to_wordpress(article_data, wp_category_id, media_id):
+def push_to_wordpress(article_data, wp_category_id):
     if not article_data:
         return
         
     auth = (WP_USER, WP_APP_PASS)
     headers = {
         'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
     
     payload = {
@@ -148,9 +133,6 @@ def push_to_wordpress(article_data, wp_category_id, media_id):
         }
     }
     
-    if media_id:
-        payload['featured_media'] = media_id
-    
     response = requests.post(WP_URL_POSTS, headers=headers, auth=auth, json=payload)
     
     if response.status_code == 201:
@@ -162,10 +144,6 @@ def push_to_wordpress(article_data, wp_category_id, media_id):
 # MAIN PIPELINE
 # ==========================================
 if __name__ == "__main__":
-    print("Mencari topik trending...")
-    topic = get_trending_sports_topic()
-    print(f"Topik terpilih: {topic}\n")
-    
     categories = {
         "Life": 565,
         "Memories": 566,
@@ -174,17 +152,18 @@ if __name__ == "__main__":
     }
     
     for cat_name, cat_id in categories.items():
-        print(f"⚙️ Membuat artikel untuk kategori: {cat_name}...")
+        print(f"⚙️ Mencari topik untuk kategori: {cat_name}...")
+        topic = get_topic_for_category(cat_name)
+        
+        print(f"⚙️ Membuat artikel untuk: {topic}...")
         article_data = generate_article(topic, cat_name)
         
         if article_data:
-            media_id = get_and_upload_image(topic)
-            
             print(f"🚀 Push draf {cat_name} ke WordPress...")
-            push_to_wordpress(article_data, cat_id, media_id)
+            push_to_wordpress(article_data, cat_id)
             
-        print("⏳ Jeda 3 detik untuk menghindari blokir dari server...")
-        time.sleep(3) # <--- Ini penangkal Error 429
+        print("⏳ Jeda 3 detik...")
+        time.sleep(3)
         print("-" * 30)
         
     print("🎉 Pipeline Selesai!")
